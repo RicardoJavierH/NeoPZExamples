@@ -61,25 +61,44 @@ int main(int argc, char *argv[])
                        TPZFMatrix<STATE>&gradU){
         const auto &x=loc[0];
         const auto &y=loc[1];
-        u[0]=(x*x-1)*(y*y-1);
-        gradU(0,0) = 2*x*(y*y-1);
-        gradU(1,0) = 2*y*(x*x-1);
-        gradU(2,0) = 0;//optional
+        u[0]=x*y*(1-x)*(1-y);//u[0]=(x*x-1)*(y*y-1);
+        gradU(0,0) = (1 - x)*(1 - y)*y - x*(1 - y)*y;//gradU(0,0) = 2*x*(y*y-1);
+        gradU(1,0) = (1 - x)*x*(1 - y) - (1 - x)*x*y;//gradU(1,0) = 2*y*(x*x-1);
+        //gradU(2,0) = 0;//optional
     };
     
     const auto rhs = [](const TPZVec<REAL>&loc, TPZVec<STATE> &u){
         const REAL &x = loc[0];
         const REAL &y = loc[1];
-        u[0] = 2*y*y+2*x*x-4;
+        u[0] = -2*(1 - x)*x - 2*(1 - y)*y;//u[0] = 2*y*y+2*x*x-4;
         u[0] *= -1;
     };
+    
+    auto SolExactEsinsin = [](const TPZVec<REAL>& loc, TPZVec<STATE>& u, TPZFMatrix<STATE>&du) {
+        const REAL x = loc[0];
+        const REAL y = loc[1];
+        
+        u[0] = sin(M_PI*x)*sin(M_PI*y);
+        du(0, 0) = M_PI*cos(M_PI*x)*sin(M_PI*y);
+        du(1, 0) = M_PI*cos(M_PI*y)*sin(M_PI*x);
+    };
+    
+    auto SourceFunctionEsinsin = [](const TPZVec<REAL>& loc, TPZVec<STATE>& u) {
+        const REAL x = loc[0];
+        const REAL y = loc[1];
+        const REAL r = x * x + y * y;
+        
+        u[0] = -2.0L*M_PI*M_PI * sin(M_PI*x)*sin(M_PI*y);
+        u[0] *= -1;
+    };
+    
     
     //dimension of the problem
     constexpr int dim{2};
     //n divisions in x direction
-    constexpr int nDivX{4};
+    constexpr int nDivX{7};
     //n divisions in y direction
-    constexpr int nDivY{4};
+    constexpr int nDivY{7};
     
     //TPZManVector<Type,N> is a vector container with static + dynamic storage. one can also use TPZVec<Type> for dynamic storage
     TPZManVector<int,2> nDivs={nDivX,nDivY};
@@ -87,7 +106,7 @@ int main(int argc, char *argv[])
     //all geometric coordinates in NeoPZ are in the 3D space
     
     //lower left corner of the domain
-    TPZManVector<REAL,3> minX={-1,-1,0};
+    TPZManVector<REAL,3> minX={0,0,0};
     //upper right corner of the domain
     TPZManVector<REAL,3> maxX={ 1, 1,0};
     
@@ -99,7 +118,7 @@ int main(int argc, char *argv[])
     //whether to create boundary elements
     constexpr bool genBoundEls{true};
     //type of elements
-    constexpr MMeshType meshType{MMeshType::EQuadrilateral};
+    constexpr MMeshType meshType{MMeshType::ETriangular};
     
     //defining the geometry of the problem
     //TPZAutoPointer is a smart pointer from the NeoPZ library
@@ -115,8 +134,8 @@ int main(int argc, char *argv[])
     ///Defines the computational mesh based on the geometric mesh
     TPZAutoPointer<TPZCompMesh>  cmesh = new TPZCompMesh(gmesh);
     
-    //polynomial order used in the approximatoin
-    constexpr int pOrder{2};
+    //polynomial order used in the approximation
+    constexpr int pOrder{1};
     //using traditional H1 elements
     cmesh->SetAllCreateFunctionsContinuous();
     
@@ -127,7 +146,7 @@ int main(int argc, char *argv[])
     
     auto *mat = new TPZMatPoisson<STATE>(matIdVec[0],dim);
     //TPZMatLaplacian solves div(k grad(u)) = -f
-    mat->SetForcingFunction(rhs,rhsPOrder);
+    mat->SetForcingFunction(SourceFunctionEsinsin,rhsPOrder);
     cmesh->InsertMaterialObject(mat);
     
     //now we insert the boundary conditions
@@ -188,7 +207,7 @@ int main(int argc, char *argv[])
     
     //let us set the exact solution and suggest an integration rule
     //for calculating the error
-    an.SetExact(exactSol,solOrder);
+    an.SetExact(SolExactEsinsin,solOrder);
     
     ///Calculating approximation error
     TPZManVector<REAL,3> error;
@@ -207,19 +226,23 @@ int main(int argc, char *argv[])
     TPZVec<std::string> scalarVars(1), vectorVars(0);
     scalarVars[0] = "Solution";
     an.DefineGraphMesh(2,scalarVars,vectorVars,"poissonSolution.vtk");
-    constexpr int resolution{2};
+    constexpr int resolution{0};
     an.PostProcess(resolution);
     
-    if (1){
+    if (0){ //Plot a shape function
         cmesh->Solution().Zero();
+        cmesh->Solution().Print("Solution");
         TPZFMatrix<STATE>& solut = cmesh->Solution();
-        int64_t icel=5;
+        int64_t icel=7;
         TPZCompEl* cel = cmesh->ElementVec()[icel];
-        TPZGeoEl* gel = cel->Reference();
+        //TPZGeoEl* gel = cel->Reference();
         
-        int side = 8;
+        int side = 2;// depend of mesh topology and Porder
         TPZConnect& con = cel->Connect(side);
         int64_t seqnum = con.SequenceNumber();
+        
+        con.Print(cmesh);
+        std::cout << "HasDependency: " <<con.HasDependency() << "\n";
         
         TPZBlock& block = cmesh->Block();
         
@@ -229,11 +252,34 @@ int main(int argc, char *argv[])
         ///vtk export
         TPZVec<std::string> scalarVars(1), vectorVars(0);
         scalarVars[0] = "Solution";
-        an.DefineGraphMesh(2,scalarVars,vectorVars,"shapeFunction.vtk");
+        
+        an.DefineGraphMesh(dim,scalarVars,vectorVars,"shapeFunction.vtk");
         constexpr int resolution{4};
         an.PostProcess(resolution);
     }
     
+    if (0){ //Plot the sum of one order shape functions to verify partition unity
+        //The pOrder must be one
+        cmesh->Solution().Zero();
+        cmesh->Solution().Print("Solution");
+        
+        TPZFMatrix<STATE>& solut = cmesh->Solution();
+        int64_t solrows = solut.Rows();
+        
+        for(int64_t i=0; i<solrows; i++){
+            solut.PutVal(i, 0, 1);
+        }
+        
+        solut.Print("Modified solution");
+        
+        ///vtk export
+        TPZVec<std::string> scalarVars(1), vectorVars(0);
+        scalarVars[0] = "Solution";
+        
+        an.DefineGraphMesh(dim,scalarVars,vectorVars,"shapeSumFunction.vtk");
+        constexpr int resolution{4};
+        an.PostProcess(resolution);
+    }
     return 0;
 }
 
